@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+python-dotenv
+gitpython
+langchain
+langchain-groq
+langchain-huggingface
+langchain-community
+chromadb
+sentence-transformers
+tree-sitter
+tree-sitter-languages
+pydantic
