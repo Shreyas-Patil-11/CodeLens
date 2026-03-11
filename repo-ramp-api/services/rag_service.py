@@ -1,4 +1,6 @@
+
 # import os
+# import concurrent.futures
 # from langchain_core.documents import Document
 # from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
 # from langchain_huggingface import HuggingFaceEmbeddings
@@ -6,104 +8,209 @@
 
 # class RAGService:
 #     def __init__(self):
-#         # We use a fast, free local embedding model
 #         self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-#         # This is where our database will save to disk
 #         self.persist_directory = "./chroma_db"
         
-#     def process_repository(self, repo_path: str) -> int:
-#         documents = []
+#         # 1. Syntax-Aware Splitters
+#         self.splitters = {
+#             Language.PYTHON: RecursiveCharacterTextSplitter.from_language(language=Language.PYTHON, chunk_size=1000, chunk_overlap=200),
+#             Language.JS: RecursiveCharacterTextSplitter.from_language(language=Language.JS, chunk_size=1000, chunk_overlap=200),
+#             Language.TS: RecursiveCharacterTextSplitter.from_language(language=Language.TS, chunk_size=1000, chunk_overlap=200),
+#             Language.CPP: RecursiveCharacterTextSplitter.from_language(language=Language.CPP, chunk_size=1000, chunk_overlap=200),
+#             Language.MARKDOWN: RecursiveCharacterTextSplitter.from_language(language=Language.MARKDOWN, chunk_size=1000, chunk_overlap=200),
+#             "default": RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+#         }
         
-#         # 1. Added .json and .md so the AI can read package.json and READMEs
-#         valid_extensions = {".py", ".js", ".jsx", ".ts", ".tsx", ".cpp", ".hpp", ".json", ".md"}
-        
-#         for root, _, files in os.walk(repo_path):
-#             if ".git" in root or "node_modules" in root: # Skip node_modules too!
-#                 continue
+#         self.ext_map = {
+#             ".py": Language.PYTHON, ".js": Language.JS, ".jsx": Language.JS,
+#             ".ts": Language.TS, ".tsx": Language.TS, ".cpp": Language.CPP,
+#             ".hpp": Language.CPP, ".md": Language.MARKDOWN
+#         }
+
+#     # # NEW: Isolated helper function designed to run inside a separate thread
+#     # def _process_single_file(self, file_path: str, ext: str) -> list:
+#     #     try:
+#     #         with open(file_path, "r", encoding="utf-8") as f:
+#     #             content = f.read()
                 
+#     #         doc = Document(page_content=content, metadata={"source": file_path})
+            
+#     #         lang = self.ext_map.get(ext)
+#     #         if lang:
+#     #             return self.splitters[lang].split_documents([doc])
+#     #         else:
+#     #             return self.splitters["default"].split_documents([doc])
+#     #     except Exception:
+#     #         return [] # Silently fail on binaries or weird encodings
+
+#     def process_repository(self, repo_path: str, collection_name: str) -> int:
+#         valid_extensions = set(self.ext_map.keys()) | {".json"}
+#         ignored_files = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml"}
+        
+#         # Step 1: Quickly map out all the file paths (Instantaneous)
+#         files_to_process = []
+#         for root, _, files in os.walk(repo_path):
+#             if ".git" in root or "node_modules" in root:
+#                 continue
 #             for file in files:
+#                 if file in ignored_files:
+#                     continue
 #                 ext = os.path.splitext(file)[1]
 #                 if ext in valid_extensions:
 #                     file_path = os.path.join(root, file)
-#                     try:
-#                         with open(file_path, "r", encoding="utf-8") as f:
-#                             content = f.read()
-#                             documents.append(
-#                                 Document(page_content=content, metadata={"source": file_path})
-#                             )
-#                     except Exception:
-#                         pass 
+#                     files_to_process.append((file_path, ext))
 
-#         # 2. Changed to a standard text splitter so it handles JS, JSON, and Python equally well
-#         text_splitter = RecursiveCharacterTextSplitter(
-#             chunk_size=1000,
-#             chunk_overlap=200
-#         )
+#         if not files_to_process:
+#             return 0
+
+#         split_docs = []
         
-#         split_docs = text_splitter.split_documents(documents)
+#         # Step 2: PARALLEL PROCESSING
+#         # Spin up a pool of 10 workers to read and parse the files simultaneously
+#         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+#             # Dispatch all file tasks to the threads
+#             future_to_file = {
+#                 executor.submit(self._process_single_file, path, ext): path 
+#                 for path, ext in files_to_process
+#             }
+            
+#             # As soon as a thread finishes a file, collect the chunks
+#             for future in concurrent.futures.as_completed(future_to_file):
+#                 chunks = future.result()
+#                 if chunks:
+#                     split_docs.extend(chunks)
 
-#         # 3. Store in ChromaDB
+#         if not split_docs:
+#             return 0
+
+#         # Step 3: Store in ChromaDB
 #         vectorstore = Chroma.from_documents(
 #             documents=split_docs,
 #             embedding=self.embeddings,
-#             persist_directory=self.persist_directory
+#             persist_directory=self.persist_directory,
+#             collection_name=collection_name 
 #         )
         
 #         return len(split_docs)
-        
-        
+    
+# # NEW: Isolated helper function designed to run inside a separate thread
+#     def _process_single_file(self, file_path: str, ext: str) -> list:
+#         try:
+#             with open(file_path, "r", encoding="utf-8") as f:
+#                 content = f.read()
+                
+#             doc = Document(page_content=content, metadata={"source": file_path})
+            
+#             # 1. Split the document as usual
+#             lang = self.ext_map.get(ext)
+#             if lang:
+#                 chunks = self.splitters[lang].split_documents([doc])
+#             else:
+#                 chunks = self.splitters["default"].split_documents([doc])
+                
+#             # 2. CONTEXT INJECTION (The Magic Fix)
+#             # Extract just the file name (e.g., 'AddNewInterview.jsx')
+#             file_name = os.path.basename(file_path)
+            
+#             # Inject the file name directly into the searchable text of EVERY chunk
+#             for chunk in chunks:
+#                 chunk.page_content = f"--- File Name: {file_name} ---\n\n{chunk.page_content}"
+                
+#             return chunks
+            
+#         except Exception:
+#             return [] # Silently fail on binaries or weird encodings
+
 import os
+import concurrent.futures
 from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 
 class RAGService:
     def __init__(self):
-        # We use a fast, free local embedding model
         self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-        self.persist_directory = "./chroma_db"
+        self.base_dir = "./chroma_db"
         
-    def process_repository(self, repo_path: str) -> int:
-        documents = []
+        self.splitters = {
+            Language.PYTHON: RecursiveCharacterTextSplitter.from_language(language=Language.PYTHON, chunk_size=1000, chunk_overlap=200),
+            Language.JS: RecursiveCharacterTextSplitter.from_language(language=Language.JS, chunk_size=1000, chunk_overlap=200),
+            Language.TS: RecursiveCharacterTextSplitter.from_language(language=Language.TS, chunk_size=1000, chunk_overlap=200),
+            Language.CPP: RecursiveCharacterTextSplitter.from_language(language=Language.CPP, chunk_size=1000, chunk_overlap=200),
+            Language.MARKDOWN: RecursiveCharacterTextSplitter.from_language(language=Language.MARKDOWN, chunk_size=1000, chunk_overlap=200),
+            "default": RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        }
         
-        valid_extensions = {".py", ".js", ".jsx", ".ts", ".tsx", ".cpp", ".hpp", ".json", ".md"}
-        
-        # EXCLUSION LIST: Block massive auto-generated files from blinding the AI
+        self.ext_map = {
+            ".py": Language.PYTHON, ".js": Language.JS, ".jsx": Language.JS,
+            ".ts": Language.TS, ".tsx": Language.TS, ".cpp": Language.CPP,
+            ".hpp": Language.CPP, ".md": Language.MARKDOWN
+        }
+
+    def _process_single_file(self, file_path: str, ext: str) -> list:
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                
+            doc = Document(page_content=content, metadata={"source": file_path})
+            
+            lang = self.ext_map.get(ext)
+            if lang:
+                chunks = self.splitters[lang].split_documents([doc])
+            else:
+                chunks = self.splitters["default"].split_documents([doc])
+                
+            file_name = os.path.basename(file_path)
+            for chunk in chunks:
+                chunk.page_content = f"--- File Name: {file_name} ---\n\n{chunk.page_content}"
+                
+            return chunks
+        except Exception:
+            return [] 
+
+    def process_repository(self, repo_path: str, collection_name: str) -> int:
+        valid_extensions = set(self.ext_map.keys()) | {".json"}
         ignored_files = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml"}
         
+        files_to_process = []
         for root, _, files in os.walk(repo_path):
             if ".git" in root or "node_modules" in root:
                 continue
-                
             for file in files:
-                # Skip the noise files
                 if file in ignored_files:
                     continue
-                    
                 ext = os.path.splitext(file)[1]
                 if ext in valid_extensions:
                     file_path = os.path.join(root, file)
-                    try:
-                        with open(file_path, "r", encoding="utf-8") as f:
-                            content = f.read()
-                            documents.append(
-                                Document(page_content=content, metadata={"source": file_path})
-                            )
-                    except Exception:
-                        pass 
+                    files_to_process.append((file_path, ext))
 
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200
-        )
+        if not files_to_process:
+            return 0
+
+        split_docs = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            future_to_file = {
+                executor.submit(self._process_single_file, path, ext): path 
+                for path, ext in files_to_process
+            }
+            
+            for future in concurrent.futures.as_completed(future_to_file):
+                chunks = future.result()
+                if chunks:
+                    split_docs.extend(chunks)
+
+        if not split_docs:
+            return 0
+
+        # FIX: Create a physically separate directory for this collection
+        persist_dir = os.path.join(self.base_dir, collection_name)
         
-        split_docs = text_splitter.split_documents(documents)
-
         vectorstore = Chroma.from_documents(
             documents=split_docs,
             embedding=self.embeddings,
-            persist_directory=self.persist_directory
+            persist_directory=persist_dir,
+            collection_name=collection_name 
         )
         
         return len(split_docs)
