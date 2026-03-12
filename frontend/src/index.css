@@ -1,1 +1,41 @@
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
 @import "tailwindcss";
+
+* { font-family: 'DM Sans', sans-serif; }
+h1, h2, h3, .logo { font-family: 'Syne', sans-serif; }
+code, pre, .font-mono { font-family: 'JetBrains Mono', monospace; }
+
+@keyframes codefall {
+  0%   { transform: translateY(-100%); }
+  100% { transform: translateY(200%); }
+}
+
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-5px); }
+}
+
+@keyframes fadein {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+.fadein {
+  animation: fadein 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.shimmer {
+  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #f8fafc; }
+::-webkit-scrollbar-thumb { background: #c7d2fe; border-radius: 3px; }

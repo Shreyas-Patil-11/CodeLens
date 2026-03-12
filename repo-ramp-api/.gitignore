@@ -42,7 +42,7 @@ dist/
 # Chroma Vector Database
 # ------------------------------
 chroma_db/
-
+dependency_graphs
 # ------------------------------
 # Temporary files
 # ------------------------------
